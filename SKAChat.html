@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Voice Room + Controls</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; background: #121212; color: white; overflow: hidden; }
+        
+        .room { display: flex; width: 100vw; height: 100vh; }
+        .panel { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: background 0.3s ease; border-right: 1px solid #333; position: relative; }
+        
+        /* Reactive Colors */
+        .panel { background: #1e1e1e; }
+        .active-speaker { background: #1b3d1b !important; }
+
+        /* Control Bar */
+        .setup-bar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 100; background: #252525; padding: 10px; border-radius: 8px; display: flex; gap: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        
+        /* Small Bottom Controls */
+        .panel-controls { position: absolute; bottom: 30px; display: flex; flex-direction: column; align-items: center; gap: 10px; background: rgba(0,0,0,0.4); padding: 15px; border-radius: 10px; }
+        
+        input[type="text"] { background: #333; border: 1px solid #444; color: white; padding: 5px; border-radius: 4px; }
+        button { cursor: pointer; padding: 6px 12px; border: none; border-radius: 4px; font-weight: bold; }
+        .btn-join { background: #4CAF50; color: white; }
+        .btn-mute { background: #e74c3c; color: white; }
+        .btn-mute.off { background: #2ecc71; }
+
+        .label { font-size: 1.5rem; font-weight: bold; margin-bottom: 20px; opacity: 0.8; }
+        label { font-size: 0.8rem; color: #aaa; }
+    </style>
+</head>
+<body>
+
+    <div class="setup-bar">
+        <input type="text" id="userName" placeholder="Name">
+        <input type="text" id="roomId" placeholder="Room ID">
+        <button id="joinBtn" class="btn-join">CONNECT</button>
+    </div>
+
+    <div class="room">
+        <div id="localPanel" class="panel">
+            <div class="label" id="localNameDisplay">YOU</div>
+            <div class="panel-controls">
+                <button id="muteBtn" class="btn-mute off">MIC: ON</button>
+            </div>
+        </div>
+
+        <div id="remotePanel" class="panel">
+            <div class="label" id="remoteNameDisplay">FRIEND</div>
+            <div class="panel-controls">
+                <label>FRIEND VOLUME</label>
+                <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="1">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let peer, localStream, remoteAudio;
+        const threshold = 12;
+
+        async function init() {
+            try {
+                // Essential for mobile and desktop browsers to trigger the "Allow" prompt
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { echoCancellation: true, noiseSuppression: true } 
+                });
+                setupVoiceDetection(localStream, 'localPanel');
+                document.getElementById('localNameDisplay').innerText = "MIC READY";
+            } catch (e) {
+                document.getElementById('localNameDisplay').innerText = "CHECK MIC SETTINGS";
+            }
+        }
+
+        document.getElementById('joinBtn').onclick = () => {
+            const name = document.getElementById('userName').value || "User";
+            const room = document.getElementById('roomId').value;
+            if(!room) return alert("Enter a Room ID");
+
+            // We use the Room ID as the Peer ID. 
+            // The first person to join 'owns' the ID.
+            peer = new Peer(room); 
+
+            peer.on('open', (id) => {
+                document.getElementById('localNameDisplay').innerText = name.toUpperCase();
+                console.log("Waiting for friend in room: " + id);
+            });
+
+            // If the room is already 'owned' by your friend, this error triggers
+            peer.on('error', (err) => {
+                if (err.type === 'id-taken') {
+                    // Since the ID is taken, we join as a guest and call them
+                    peer = new Peer(); 
+                    peer.on('open', () => {
+                        const call = peer.call(room, localStream);
+                        handleCall(call);
+                    });
+                } else {
+                    alert("Connection Error: " + err.type);
+                }
+            });
+
+            peer.on('call', (incomingCall) => {
+                incomingCall.answer(localStream);
+                handleCall(incomingCall);
+            });
+        };
+
+        function handleCall(call) {
+            call.on('stream', (stream) => {
+                if(!remoteAudio) {
+                    remoteAudio = new Audio();
+                    remoteAudio.srcObject = stream;
+                    if (AudioContext.state === 'suspended') {
+                        AudioContext.resume();
+                    }
+                    remoteAudio.play();
+                    setupVoiceDetection(stream, 'remotePanel');
+                    document.getElementById('remoteNameDisplay').innerText = "CONNECTED";
+                }
+            });
+        }
+
+        // --- Mute Logic ---
+        document.getElementById('muteBtn').onclick = function() {
+            const enabled = localStream.getAudioTracks()[0].enabled;
+            if (enabled) {
+                localStream.getAudioTracks()[0].enabled = false;
+                this.innerText = "MIC: MUTED";
+                this.classList.remove('off');
+            } else {
+                localStream.getAudioTracks()[0].enabled = true;
+                this.innerText = "MIC: ON";
+                this.classList.add('off');
+            }
+        };
+
+        // --- Volume Logic ---
+        document.getElementById('volumeSlider').oninput = function() {
+            if(remoteAudio) remoteAudio.volume = this.value;
+        };
+
+        function setupVoiceDetection(stream, panelId) {
+            const ctx = new AudioContext();
+            const source = ctx.createMediaStreamSource(stream);
+            const analyzer = ctx.createAnalyser();
+            source.connect(analyzer);
+            const data = new Uint8Array(analyzer.frequencyBinCount);
+            const panel = document.getElementById(panelId);
+
+            function check() {
+                analyzer.getByteFrequencyData(data);
+                let val = data.reduce((a, b) => a + b) / data.length;
+                if (val > threshold) panel.classList.add('active-speaker');
+                else panel.classList.remove('active-speaker');
+                requestAnimationFrame(check);
+            }
+            check();
+        }
+
+        init();
+    </script>
+</body>
+</html>
