@@ -63,78 +63,78 @@
     </div>
 
     <script>
-        let peer, localStream, remoteAudio;
-        const threshold = 12; // Sensitivity for voice glow
-        const statusEl = document.getElementById('status-bar');
-
-        function updateStatus(msg) {
-            statusEl.innerText = "System: " + msg;
+            let peer, localStream, remoteAudio;
+    const threshold = 12;
+    const statusEl = document.getElementById('status-bar');
+    
+    function updateStatus(msg) {
+        statusEl.innerText = "System: " + msg;
+    }
+    
+    async function init() {
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: { echoCancellation: true, noiseSuppression: true } 
+            });
+            setupVoiceDetection(localStream, 'localPanel');
+            
+            // IMPORTANT: We don't create the Peer object until we have a Room ID
+            updateStatus("Ready. Enter a Room ID and click Connect.");
+        } catch (e) {
+            updateStatus("Mic Error: Please allow microphone access.");
         }
-
-        // Initialize Microphone on Page Load
-        async function init() {
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+    }
+    
+    document.getElementById('joinBtn').onclick = () => {
+        const name = document.getElementById('userName').value || "User";
+        const room = document.getElementById('roomId').value;
+        if(!room) return alert("Enter a Room ID");
+    
+        // 1. Create the Peer connection using the Room ID directly
+        // This makes YOU the "Receiver" for that ID.
+        peer = new Peer(room); 
+    
+        peer.on('open', (id) => {
+            document.getElementById('localNameDisplay').innerText = name.toUpperCase();
+            updateStatus("Room active. Tell your friend to join room: " + id);
+        });
+    
+        // 2. If the ID is 'unavailable', it means your friend is ALREADY the receiver.
+        // So YOU become the "Caller" instead.
+        peer.on('error', (err) => {
+            if (err.type === 'unavailable-id' || err.type === 'id-taken') {
+                updateStatus("Friend found! Connecting to audio...");
+                
+                // Create a random ID for yourself so there is no conflict
+                peer = new Peer(); 
+                peer.on('open', () => {
+                    const call = peer.call(room, localStream);
+                    handleCall(call);
                 });
-                setupVoiceDetection(localStream, 'localPanel');
-                updateStatus("Microphone ready. Enter a Room ID to start.");
-            } catch (e) {
-                updateStatus("Error: Microphone access denied.");
-                document.getElementById('localNameDisplay').innerText = "MIC ERROR";
+            } else {
+                updateStatus("Error: " + err.type);
             }
-        }
-
-        document.getElementById('joinBtn').onclick = () => {
-            const name = document.getElementById('userName').value || "User";
-            const room = document.getElementById('roomId').value;
-            if(!room) return alert("Please enter a Room ID");
-
-            updateStatus("Attempting to join room: " + room + "...");
-
-            // Create Peer using the Room ID as the address
-            peer = new Peer(room); 
-
-            peer.on('open', (id) => {
-                document.getElementById('localNameDisplay').innerText = name.toUpperCase();
-                updateStatus("Room opened. Waiting for friend to join...");
-            });
-
-            // If ID is taken, it means friend is already the "Host", so we "Call" them
-            peer.on('error', (err) => {
-                if (err.type === 'id-taken') {
-                    updateStatus("Room busy, connecting to friend...");
-                    peer = new Peer(); // Create random ID for self
-                    peer.on('open', () => {
-                        const call = peer.call(room, localStream);
-                        handleCall(call);
-                        document.getElementById('localNameDisplay').innerText = name.toUpperCase();
-                    });
-                } else {
-                    updateStatus("Connection Error: " + err.type);
-                }
-            });
-
-            // Listen for incoming calls (if we are the Host)
-            peer.on('call', (incomingCall) => {
-                updateStatus("Friend joining... connecting audio.");
-                incomingCall.answer(localStream);
-                handleCall(incomingCall);
-            });
-        };
-
-        function handleCall(call) {
-            call.on('stream', (stream) => {
-                if(!remoteAudio) {
-                    remoteAudio = new Audio();
-                    remoteAudio.srcObject = stream;
-                    remoteAudio.play();
-                    setupVoiceDetection(stream, 'remotePanel');
-                    document.getElementById('remoteNameDisplay').innerText = "CONNECTED";
-                    updateStatus("Connected! Audio is live.");
-                }
-            });
-        }
+        });
+    
+        // 3. This triggers for the person who joined FIRST (the Receiver)
+        peer.on('call', (incomingCall) => {
+            updateStatus("Friend joined! Audio live.");
+            incomingCall.answer(localStream);
+            handleCall(incomingCall);
+        });
+    };
+    
+    function handleCall(call) {
+        call.on('stream', (stream) => {
+            if(!remoteAudio) {
+                remoteAudio = new Audio();
+                remoteAudio.srcObject = stream;
+                remoteAudio.play();
+                setupVoiceDetection(stream, 'remotePanel');
+                document.getElementById('remoteNameDisplay').innerText = "CONNECTED";
+            }
+        });
+    }
 
         // --- Mute Logic ---
         document.getElementById('muteBtn').onclick = function() {
@@ -179,4 +179,5 @@
     </script>
 </body>
 </html>
+
 
