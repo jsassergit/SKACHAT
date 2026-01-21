@@ -9,7 +9,6 @@
         body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', sans-serif; background: #121212; color: white; overflow: hidden; }
         .room { display: flex; width: 100vw; height: 100vh; }
         .panel { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: background 0.4s ease; border-right: 1px solid #333; position: relative; }
-        
         .panel { background: #1e1e1e; }
         .active-speaker { background: #1b3d1b !important; border-color: #4CAF50; }
 
@@ -18,9 +17,8 @@
         
         input[type="text"] { background: #333; border: 1px solid #555; color: white; padding: 8px; border-radius: 4px; outline: none; }
         button { cursor: pointer; padding: 8px 16px; border: none; border-radius: 4px; font-weight: bold; transition: opacity 0.2s; }
-        
         .btn-join { background: #4CAF50; color: white; }
-        .btn-hangup { background: #e74c3c; color: white; }
+        .btn-hangup { background: #e74c3c; color: white; display: none; }
         .btn-mute { background: #e74c3c; color: white; width: 100%; }
         .btn-mute.off { background: #2ecc71; }
 
@@ -35,7 +33,7 @@
         <input type="text" id="userName" placeholder="Your Name">
         <input type="text" id="roomId" placeholder="Room ID">
         <button id="joinBtn" class="btn-join">CONNECT</button>
-        <button id="hangupBtn" class="btn-hangup" style="display:none;">DISCONNECT</button>
+        <button id="hangupBtn" class="btn-hangup">LEAVE</button>
     </div>
 
     <div class="room">
@@ -58,57 +56,78 @@
     </div>
 
     <script>
-        let peer, localStream, remoteAudio, currentCall;
+        let peer, localStream, remoteAudio, currentCall, myName;
         const threshold = 12;
-        const statusEl = document.getElementById('status-bar');
-        
-        function updateStatus(msg) { statusEl.innerText = "System: " + msg; }
-        
+
+        function updateStatus(msg) { document.getElementById('status-bar').innerText = "System: " + msg; }
+        function showLeaveBtn() {
+            document.getElementById('joinBtn').style.display = 'none';
+            document.getElementById('hangupBtn').style.display = 'inline-block';
+        }
+
         async function init() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: true, noiseSuppression: true } 
-                });
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 setupVoiceDetection(localStream, 'localPanel');
-                updateStatus("Ready. Enter a Room ID and click Connect.");
-            } catch (e) {
-                updateStatus("Mic Error: Please allow microphone access.");
-            }
+                updateStatus("Mic ready.");
+            } catch (e) { updateStatus("Mic Error."); }
         }
-        
+
         document.getElementById('joinBtn').onclick = () => {
-            const name = document.getElementById('userName').value || "User";
+            myName = document.getElementById('userName').value || "User";
             const room = document.getElementById('roomId').value;
-            if(!room) return alert("Enter a Room ID");
-        
-            peer = new Peer(room); 
-        
+            if(!room) return alert("Enter Room ID");
+
+            peer = new Peer(room);
+
             peer.on('open', (id) => {
-                document.getElementById('localNameDisplay').innerText = name.toUpperCase();
-                document.getElementById('joinBtn').style.display = 'none';
-                document.getElementById('hangupBtn').style.display = 'block';
-                updateStatus("Room active. Waiting for friend...");
+                document.getElementById('localNameDisplay').innerText = myName.toUpperCase();
+                showLeaveBtn();
+                updateStatus("Room Created: " + id);
             });
-        
+
+            // GUEST LOGIC
             peer.on('error', (err) => {
                 if (err.type === 'unavailable-id' || err.type === 'id-taken') {
-                    // This means we are the "Caller"
-                    peer.destroy(); // Close the "Host" attempt
+                    peer.destroy();
                     setTimeout(() => {
                         peer = new Peer(); 
                         peer.on('open', () => {
-                            const call = peer.call(room, localStream, { metadata: { name: name } });
+                            document.getElementById('localNameDisplay').innerText = myName.toUpperCase();
+                            showLeaveBtn();
+                            updateStatus("Joining room...");
+                            
+                            // Call with metadata (Guest -> Host)
+                            const call = peer.call(room, localStream, { metadata: { name: myName } });
                             handleCall(call);
+
+                            // Connect Data Channel to get Host's Name
+                            const conn = peer.connect(room);
+                            conn.on('open', () => conn.send({ name: myName }));
+                            conn.on('data', (data) => {
+                                if(data.name) document.getElementById('remoteNameDisplay').innerText = data.name.toUpperCase();
+                            });
                         });
-                    }, 500);
+                    }, 300);
                 }
             });
-        
+
+            // HOST LOGIC
             peer.on('call', (incomingCall) => {
-                const callerName = incomingCall.metadata.name || "FRIEND";
-                document.getElementById('remoteNameDisplay').innerText = callerName.toUpperCase();
+                const guestName = incomingCall.metadata.name || "FRIEND";
+                document.getElementById('remoteNameDisplay').innerText = guestName.toUpperCase();
                 incomingCall.answer(localStream);
                 handleCall(incomingCall);
+            });
+
+            peer.on('connection', (conn) => {
+                conn.on('open', () => {
+                    // Send Host's name to the Guest
+                    conn.send({ name: myName });
+                });
+                conn.on('data', (data) => {
+                    if(data.name) document.getElementById('remoteNameDisplay').innerText = data.name.toUpperCase();
+                });
             });
         };
 
@@ -120,27 +139,21 @@
                     remoteAudio.srcObject = stream;
                     remoteAudio.play();
                     setupVoiceDetection(stream, 'remotePanel');
-                    if(document.getElementById('remoteNameDisplay').innerText === "FRIEND") {
-                         document.getElementById('remoteNameDisplay').innerText = "CONNECTED";
-                    }
+                    updateStatus("Connected!");
                 }
             });
-
             call.on('close', () => {
-                updateStatus("Friend disconnected.");
-                document.getElementById('remoteNameDisplay').innerText = "LEFT ROOM";
-                if(remoteAudio) { remoteAudio.srcObject = null; remoteAudio = null; }
+                updateStatus("Friend left.");
+                document.getElementById('remoteNameDisplay').innerText = "DISCONNECTED";
             });
         }
 
-        document.getElementById('hangupBtn').onclick = () => {
-            location.reload(); 
-        };
+        document.getElementById('hangupBtn').onclick = () => location.reload();
 
         document.getElementById('muteBtn').onclick = function() {
-            const enabled = localStream.getAudioTracks()[0].enabled;
-            localStream.getAudioTracks()[0].enabled = !enabled;
-            this.innerText = !enabled ? "MIC: ON" : "MIC: MUTED";
+            const track = localStream.getAudioTracks()[0];
+            track.enabled = !track.enabled;
+            this.innerText = track.enabled ? "MIC: ON" : "MIC: MUTED";
             this.classList.toggle('off');
         };
 
@@ -156,13 +169,10 @@
             source.connect(analyzer);
             const data = new Uint8Array(analyzer.frequencyBinCount);
             const panel = document.getElementById(panelId);
-
             function check() {
                 analyzer.getByteFrequencyData(data);
-                let sum = 0;
-                for(let i=0; i<data.length; i++) sum += data[i];
-                let average = sum / data.length;
-                if (average > threshold) panel.classList.add('active-speaker');
+                let avg = data.reduce((a, b) => a + b) / data.length;
+                if (avg > threshold) panel.classList.add('active-speaker');
                 else panel.classList.remove('active-speaker');
                 requestAnimationFrame(check);
             }
@@ -173,4 +183,3 @@
     </script>
 </body>
 </html>
-
