@@ -24,16 +24,18 @@
 
         .label { font-size: 1.8rem; font-weight: bold; margin-bottom: 20px; opacity: 0.8; letter-spacing: 1px; }
         label { font-size: 0.75rem; color: #aaa; text-transform: uppercase; }
-        #status-bar { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); color: #666; font-size: 0.8rem; pointer-events: none; }
+        #status-bar { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); color: #666; font-size: 0.8rem; pointer-events: none; z-index: 100; }
     </style>
 </head>
 <body>
+
+    <div id="status-bar">System: Waiting for input...</div>
 
     <div class="setup-bar">
         <input type="text" id="userName" placeholder="Your Name">
         <input type="text" id="roomId" placeholder="Room ID">
         <button id="joinBtn" class="btn-join">CONNECT</button>
-        <button id="hangupBtn" class="btn-hangup">LEAVE</button>
+        <button id="hangupBtn" class="btn-hangup">DISCONNECT</button>
     </div>
 
     <div class="room">
@@ -51,8 +53,6 @@
                 <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="1">
             </div>
         </div>
-
-        <div id="status-bar">System: Waiting for input...</div>
     </div>
 
     <script>
@@ -60,17 +60,21 @@
         const threshold = 12;
 
         function updateStatus(msg) { document.getElementById('status-bar').innerText = "System: " + msg; }
-        function showLeaveBtn() {
+        
+        function setConnectedUI(localName) {
+            document.getElementById('localNameDisplay').innerText = localName.toUpperCase();
             document.getElementById('joinBtn').style.display = 'none';
             document.getElementById('hangupBtn').style.display = 'inline-block';
         }
 
         async function init() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { echoCancellation: true, noiseSuppression: true } 
+                });
                 setupVoiceDetection(localStream, 'localPanel');
                 updateStatus("Mic ready.");
-            } catch (e) { updateStatus("Mic Error."); }
+            } catch (e) { updateStatus("Mic Error: Please allow access."); }
         }
 
         document.getElementById('joinBtn').onclick = () => {
@@ -81,52 +85,53 @@
             peer = new Peer(room);
 
             peer.on('open', (id) => {
-                document.getElementById('localNameDisplay').innerText = myName.toUpperCase();
-                showLeaveBtn();
-                updateStatus("Room Created: " + id);
+                setConnectedUI(myName);
+                updateStatus("Room active. Waiting for friend...");
             });
 
-            // GUEST LOGIC
             peer.on('error', (err) => {
                 if (err.type === 'unavailable-id' || err.type === 'id-taken') {
                     peer.destroy();
                     setTimeout(() => {
                         peer = new Peer(); 
                         peer.on('open', () => {
-                            document.getElementById('localNameDisplay').innerText = myName.toUpperCase();
-                            showLeaveBtn();
-                            updateStatus("Joining room...");
+                            setConnectedUI(myName);
+                            updateStatus("Connecting to " + room + "...");
                             
-                            // Call with metadata (Guest -> Host)
+                            // 1. Voice Call
                             const call = peer.call(room, localStream, { metadata: { name: myName } });
                             handleCall(call);
 
-                            // Connect Data Channel to get Host's Name
+                            // 2. Data Sync
                             const conn = peer.connect(room);
                             conn.on('open', () => conn.send({ name: myName }));
                             conn.on('data', (data) => {
-                                if(data.name) document.getElementById('remoteNameDisplay').innerText = data.name.toUpperCase();
+                                if(data.name) {
+                                    document.getElementById('remoteNameDisplay').innerText = data.name.toUpperCase();
+                                    updateStatus("Connected to " + data.name);
+                                }
                             });
                         });
                     }, 300);
                 }
             });
 
-            // HOST LOGIC
+            // Host side receivers
             peer.on('call', (incomingCall) => {
-                const guestName = incomingCall.metadata.name || "FRIEND";
-                document.getElementById('remoteNameDisplay').innerText = guestName.toUpperCase();
                 incomingCall.answer(localStream);
                 handleCall(incomingCall);
+                const guestName = incomingCall.metadata.name || "FRIEND";
+                document.getElementById('remoteNameDisplay').innerText = guestName.toUpperCase();
+                updateStatus("Friend joined: " + guestName);
             });
 
             peer.on('connection', (conn) => {
-                conn.on('open', () => {
-                    // Send Host's name to the Guest
-                    conn.send({ name: myName });
-                });
+                conn.on('open', () => conn.send({ name: myName }));
                 conn.on('data', (data) => {
-                    if(data.name) document.getElementById('remoteNameDisplay').innerText = data.name.toUpperCase();
+                    if(data.name) {
+                        document.getElementById('remoteNameDisplay').innerText = data.name.toUpperCase();
+                        updateStatus("Connected to " + data.name);
+                    }
                 });
             });
         };
@@ -139,11 +144,10 @@
                     remoteAudio.srcObject = stream;
                     remoteAudio.play();
                     setupVoiceDetection(stream, 'remotePanel');
-                    updateStatus("Connected!");
                 }
             });
             call.on('close', () => {
-                updateStatus("Friend left.");
+                updateStatus("Friend disconnected.");
                 document.getElementById('remoteNameDisplay').innerText = "DISCONNECTED";
             });
         }
