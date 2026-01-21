@@ -15,9 +15,8 @@
             --text-dim: #aaaaaa;
         }
 
-        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: var(--bg-dark); color: var(--text-main); overflow: hidden; }
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg-dark); color: var(--text-main); overflow: hidden; }
         
-        /* Layout */
         .room { display: flex; width: 100vw; height: 100vh; }
         .panel { 
             flex: 1; 
@@ -26,50 +25,27 @@
             align-items: center; 
             justify-content: center; 
             transition: background 0.3s ease, border-color 0.3s ease; 
-            border: 2px solid transparent;
+            border: 4px solid transparent;
             background: var(--bg-panel);
             position: relative;
         }
         
-        /* Active Speaker Glow */
-        .active-speaker { 
-            background: #1b3d1b !important; 
-            border-color: var(--accent-green); 
-        }
+        .active-speaker { background: #1b3d1b !important; border-color: var(--accent-green) !important; }
 
-        /* Top Bar */
         .setup-bar { 
-            position: absolute; 
-            top: 20px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            z-index: 100; 
-            background: #252525; 
-            padding: 15px; 
-            border-radius: 12px; 
-            display: flex; 
-            gap: 10px; 
-            box-shadow: 0 8px 32px rgba(0,0,0,0.8); 
-            border: 1px solid #444; 
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%); 
+            z-index: 100; background: #252525; padding: 15px; border-radius: 12px; 
+            display: flex; gap: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.8); border: 1px solid #444; 
         }
         
-        /* Controls */
         .panel-controls { 
-            position: absolute; 
-            bottom: 60px; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            gap: 15px; 
-            background: rgba(0,0,0,0.6); 
-            padding: 20px; 
-            border-radius: 16px; 
-            backdrop-filter: blur(5px);
-            min-width: 180px; 
+            position: absolute; bottom: 60px; display: flex; flex-direction: column; 
+            align-items: center; gap: 15px; background: rgba(0,0,0,0.6); padding: 20px; 
+            border-radius: 16px; backdrop-filter: blur(5px); min-width: 180px; 
         }
         
         input[type="text"] { background: #333; border: 1px solid #555; color: white; padding: 10px; border-radius: 6px; outline: none; }
-        button { cursor: pointer; padding: 10px 20px; border: none; border-radius: 6px; font-weight: bold; transition: all 0.2s; }
+        button { cursor: pointer; padding: 10px 20px; border: none; border-radius: 6px; font-weight: bold; }
         
         .btn-join { background: var(--accent-green); color: white; }
         .btn-hangup { background: var(--accent-red); color: white; display: none; }
@@ -77,16 +53,14 @@
         .btn-mute.off { background: #2ecc71; }
 
         .label { font-size: 2.5rem; font-weight: 800; margin-bottom: 20px; opacity: 0.9; text-align: center; }
-        label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+        label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; }
         
         #status-bar { position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); color: #666; font-size: 0.85rem; font-family: monospace; }
-
-        input[type="range"] { width: 100%; cursor: pointer; }
     </style>
 </head>
 <body>
 
-    <div class="setup-bar" id="setupBar">
+    <div class="setup-bar">
         <input type="text" id="userName" placeholder="Your Name">
         <input type="text" id="roomId" placeholder="Room ID">
         <button id="joinBtn" class="btn-join">CONNECT</button>
@@ -109,169 +83,19 @@
             </div>
         </div>
 
-        <div id="status-bar">System: Waiting for user...</div>
+        <div id="status-bar">System: Ready</div>
     </div>
 
     <script>
-        let peer, localStream, currentCall, remoteAudio;
-        const threshold = 12;
+        let peer, localStream, currentCall, remoteAudio, dataConn;
         const statusEl = document.getElementById('status-bar');
 
-        function updateStatus(msg) {
-            statusEl.innerText = "System: " + msg;
-        }
+        function updateStatus(msg) { statusEl.innerText = "System: " + msg; }
 
         async function init() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: true, noiseSuppression: true } 
-                });
-                setupVoiceDetection(localStream, 'localPanel');
-                updateStatus("Microphone ready.");
-            } catch (e) {
-                updateStatus("Error: Microphone access denied.");
-            }
-        }
+                localStream = await navigator.mediaDevices
 
-        document.getElementById('joinBtn').onclick = () => {
-            const name = document.getElementById('userName').value || "User";
-            const room = document.getElementById('roomId').value;
-            if(!room) return alert("Please enter a Room ID");
-
-            // Create Peer with Room ID
-            peer = new Peer(room);
-
-            peer.on('open', (id) => {
-                document.getElementById('localNameDisplay').innerText = name.toUpperCase();
-                document.getElementById('joinBtn').style.display = 'none';
-                document.getElementById('hangupBtn').style.display = 'block';
-                updateStatus("Room active: " + id + ". Waiting for friend...");
-            });
-
-            peer.on('call', (incomingCall) => {
-                const remoteName = incomingCall.metadata.name || "FRIEND";
-                document.getElementById('remoteNameDisplay').innerText = remoteName.toUpperCase();
-                updateStatus("Connected to " + remoteName);
-                
-                incomingCall.answer(localStream);
-                handleCall(incomingCall);
-            });
-
-            peer.on('error', (err) => {
-                if (err.type === 'unavailable-id' || err.type === 'id-taken') {
-                    updateStatus("Room busy. Connecting as guest...");
-                    // Try connecting as caller
-                    connectAsCaller(room, name);
-                } else {
-                    updateStatus("PeerJS Error: " + err.type);
-                }
-            });
-        };
-
-        function connectAsCaller(room, myName) {
-            peer = new Peer(); // Random ID for the caller
-            peer.on('open', () => {
-                // Pass our name in the metadata so the receiver knows who we are
-                const call = peer.call(room, localStream, {
-                    metadata: { name: myName }
-                });
-                handleCall(call);
-            });
-        }
-
-        function handleCall(call) {
-            currentCall = call;
-
-            call.on('stream', (stream) => {
-                if(!remoteAudio) {
-                    remoteAudio = new Audio();
-                    remoteAudio.srcObject = stream;
-                    remoteAudio.play();
-                    setupVoiceDetection(stream, 'remotePanel');
-                    // If we are the caller, we don't know the receiver's name easily 
-                    // without a data channel, so we'll set it to "FRIEND" or "HOST"
-                    if(document.getElementById('remoteNameDisplay').innerText === "WAITING...") {
-                        document.getElementById('remoteNameDisplay').innerText = "FRIEND";
-                    }
-                }
-            });
-
-            call.on('close', () => {
-                resetUI();
-            });
-
-            // Handle browser tab close/disconnect
-            call.on('error', () => {
-                resetUI();
-            });
-        }
-
-        function resetUI() {
-            updateStatus("Friend left the room.");
-            document.getElementById('remoteNameDisplay').innerText = "DISCONNECTED";
-            if(remoteAudio) {
-                remoteAudio.pause();
-                remoteAudio.srcObject = null;
-                remoteAudio = null;
-            }
-            // Remove the glow
-            document.getElementById('remotePanel').classList.remove('active-speaker');
-        }
-
-        document.getElementById('hangupBtn').onclick = () => {
-            if(currentCall) currentCall.close();
-            if(peer) peer.destroy();
-            
-            document.getElementById('joinBtn').style.display = 'block';
-            document.getElementById('hangupBtn').style.display = 'none';
-            document.getElementById('remoteNameDisplay').innerText = "WAITING...";
-            updateStatus("Disconnected.");
-        };
-
-        // --- Mute Logic ---
-        document.getElementById('muteBtn').onclick = function() {
-            const enabled = localStream.getAudioTracks()[0].enabled;
-            localStream.getAudioTracks()[0].enabled = !enabled;
-            this.innerText = !enabled ? "MIC: ON" : "MIC: MUTED";
-            this.classList.toggle('off');
-        };
-
-        // --- Volume Slider Logic ---
-        document.getElementById('volumeSlider').oninput = function() {
-            if(remoteAudio) remoteAudio.volume = this.value;
-        };
-
-        // --- Voice Glow Logic ---
-        function setupVoiceDetection(stream, panelId) {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            const ctx = new AudioContext();
-            const source = ctx.createMediaStreamSource(stream);
-            const analyzer = ctx.createAnalyser();
-            analyzer.fftSize = 256;
-            source.connect(analyzer);
-            
-            const data = new Uint8Array(analyzer.frequencyBinCount);
-            const panel = document.getElementById(panelId);
-
-            function check() {
-                if(ctx.state === 'suspended') ctx.resume();
-                analyzer.getByteFrequencyData(data);
-                let sum = 0;
-                for(let i=0; i<data.length; i++) sum += data[i];
-                let average = sum / data.length;
-
-                if (average > threshold) panel.classList.add('active-speaker');
-                else panel.classList.remove('active-speaker');
-                
-                requestAnimationFrame(check);
-            }
-            check();
-        }
-
-        init();
-    </script>
-</body>
-</html>
 
 
 
